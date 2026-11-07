@@ -1,26 +1,125 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --petrol: #0b2430;
+  --petrol-dark: #051218;
+  --petrol-light: #164860;
+  --dorado: #b8963a;
+  --dorado-dark: #9a7c2e;
+  --dorado-light: #d4af5a;
+  --bone-white: #faf8f5;
+  --bone-warm: #f3f0eb;
+  --gray-premium: #4a4a4a;
+  --gray-soft: #7a7a7a;
+  --border: #e8e4df;
+  --destructive: #c0392b;
+  --background: #faf8f5;
+  --foreground: #0b2430;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-petrol: var(--petrol);
+  --color-petrol-dark: var(--petrol-dark);
+  --color-petrol-light: var(--petrol-light);
+  --color-dorado: var(--dorado);
+  --color-dorado-dark: var(--dorado-dark);
+  --color-dorado-light: var(--dorado-light);
+  --color-bone-white: var(--bone-white);
+  --color-bone-warm: var(--bone-warm);
+  --color-gray-premium: var(--gray-premium);
+  --color-gray-soft: var(--gray-soft);
+  --color-border-soft: var(--border);
+  --color-destructive: var(--destructive);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+  text-size-adjust: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Ergonomía táctil y prevención de auto-zoom en iPadOS / iOS Safari (< 1024px) */
+@media (max-width: 1023px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+    min-height: 44px;
+  }
+}
+
+button,
+a,
+summary,
+select,
+input[type="checkbox"],
+input[type="radio"] {
+  touch-action: manipulation;
+}
+
+/* Ocultar marcador nativo de <details> en todos los navegadores incluido Safari */
+summary::-webkit-details-marker {
+  display: none;
+}
+
+details[open] .details-chevron {
+  transform: rotate(180deg);
+}
+
+/* Anillo de foco accesible corporativo */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(184, 150, 58, 0.35);
+  outline-offset: 0px;
+  border-color: var(--petrol);
+}
+
+/* Safe area inferior para iPhone / iPad con barra gestual */
+.pb-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+/* Ocultar barra de scroll horizontal en tiras de pestañas táctiles */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Impresión limpia para Cotizaciones y Reportes en PDF */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #0b2430 !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  main {
+    padding-left: 0 !important;
+  }
+
+  .print-sheet {
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
 }
