@@ -16,11 +16,51 @@ import type {
   TemplateType,
 } from "@/lib/types";
 
+const SAFE_STORAGE_PREFIXES = ["companies/", "reports/", "templates/"] as const;
+
+function isSafeStoragePath(path: string | null | undefined): path is string {
+  if (!path || typeof path !== "string") return false;
+  const trimmed = path.trim();
+  if (
+    trimmed.length === 0 ||
+    trimmed.length > 512 ||
+    trimmed.includes("..") ||
+    trimmed.startsWith("/") ||
+    trimmed.includes("\\")
+  ) {
+    return false;
+  }
+  return SAFE_STORAGE_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+}
+
+async function requireActiveConsultant() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error("Sesión expirada o no autorizada.");
+  }
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id, is_active")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (!profile || !profile.is_active) {
+    throw new Error("Acceso exclusivo para consultoras internas activas de Taltum.");
+  }
+
+  return { supabase, user };
+}
+
 export async function loginAction(
   _prevState: { error?: string } | null,
   formData: FormData
 ): Promise<{ error?: string }> {
-  const email = String(formData.get("email") ?? "").trim();
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
 
   if (!email || !password) {
@@ -28,15 +68,29 @@ export async function loginAction(
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data: authData, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   });
 
-  if (error) {
+  if (error || !authData.user) {
     return {
       error:
         "Credenciales inválidas. Verifica tu correo (@taltum.co) y contraseña.",
+    };
+  }
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id, is_active")
+    .eq("id", authData.user.id)
+    .maybeSingle();
+
+  if (!profile || !profile.is_active) {
+    await supabase.auth.signOut();
+    return {
+      error:
+        "Esta cuenta no tiene permisos de consultoría interna activos en Taltum.",
     };
   }
 
@@ -55,10 +109,7 @@ export async function logoutAction() {
 // EMPRESAS / CLIENTES
 // ============================================================================
 export async function createCompanyAction(formData: FormData) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user } = await requireActiveConsultant();
 
   const payload = {
     name: String(formData.get("name") ?? "").trim(),
@@ -76,7 +127,7 @@ export async function createCompanyAction(formData: FormData) {
     contact_phone: String(formData.get("contact_phone") ?? "").trim() || null,
     status: (String(formData.get("status") ?? "activo") as CompanyStatus) || "activo",
     notes: String(formData.get("notes") ?? "").trim() || null,
-    created_by: user?.id ?? null,
+    created_by: user.id,
   };
 
   const { data, error } = await supabase
@@ -95,7 +146,7 @@ export async function createCompanyAction(formData: FormData) {
 }
 
 export async function updateCompanyAction(companyId: string, formData: FormData) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
 
   const payload = {
     name: String(formData.get("name") ?? "").trim(),
@@ -130,7 +181,7 @@ export async function updateCompanyAction(companyId: string, formData: FormData)
 }
 
 export async function assignServiceToCompanyAction(formData: FormData) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
   const companyId = String(formData.get("company_id") ?? "");
   const serviceId = String(formData.get("service_id") ?? "");
   const startDate = String(formData.get("start_date") ?? "") || null;
@@ -163,7 +214,7 @@ export async function updateCompanyServiceProgressAction(
   progress: number,
   status: "pendiente" | "activo" | "pausado" | "completado"
 ) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
   const { error } = await supabase
     .from("company_services")
     .update({ progress, status })
@@ -180,7 +231,7 @@ export async function updateCompanyServiceProgressAction(
 // CATÁLOGO DE SERVICIOS Y FORMATOS ESTABLECIDOS
 // ============================================================================
 export async function createServiceAction(formData: FormData) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
   const deliverablesText = String(formData.get("deliverables") ?? "");
   const deliverables = deliverablesText
     .split("\n")
@@ -217,10 +268,10 @@ export async function createTemplateAction(params: {
   storage_path?: string | null;
   file_name?: string | null;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user } = await requireActiveConsultant();
+  const safePath = isSafeStoragePath(params.storage_path)
+    ? params.storage_path
+    : null;
 
   const { error } = await supabase.from("templates").insert({
     code: params.code.trim().toUpperCase(),
@@ -231,9 +282,9 @@ export async function createTemplateAction(params: {
     template_type: params.template_type,
     description: params.description?.trim() || null,
     default_content: params.default_content?.trim() || null,
-    storage_path: params.storage_path ?? null,
-    file_name: params.file_name ?? null,
-    created_by: user?.id ?? null,
+    storage_path: safePath,
+    file_name: safePath ? params.file_name ?? null : null,
+    created_by: user.id,
   });
 
   if (error) {
@@ -262,15 +313,27 @@ export async function updateTemplateAction(
     previous_storage_path?: string | null;
   }
 ) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
+
+  // Consultar el storage_path actual directamente en base de datos (no confiar en el cliente)
+  const { data: currentTpl } = await supabase
+    .from("templates")
+    .select("storage_path")
+    .eq("id", templateId)
+    .maybeSingle();
+
+  const nextSafePath = isSafeStoragePath(params.storage_path)
+    ? params.storage_path
+    : null;
 
   if (
-    params.previous_storage_path &&
-    params.previous_storage_path !== params.storage_path
+    currentTpl?.storage_path &&
+    isSafeStoragePath(currentTpl.storage_path) &&
+    currentTpl.storage_path !== nextSafePath
   ) {
     await supabase.storage
       .from("taltum-files")
-      .remove([params.previous_storage_path]);
+      .remove([currentTpl.storage_path]);
   }
 
   const { error } = await supabase
@@ -285,8 +348,8 @@ export async function updateTemplateAction(
       template_type: params.template_type,
       description: params.description?.trim() || null,
       default_content: params.default_content?.trim() || null,
-      storage_path: params.storage_path ?? null,
-      file_name: params.file_name ?? null,
+      storage_path: nextSafePath,
+      file_name: nextSafePath ? params.file_name ?? null : null,
     })
     .eq("id", templateId);
 
@@ -302,12 +365,20 @@ export async function updateTemplateAction(
 
 export async function deleteTemplateAction(
   templateId: string,
-  storagePath?: string | null
+  _storagePath?: string | null
 ) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
 
-  if (storagePath) {
-    await supabase.storage.from("taltum-files").remove([storagePath]);
+  const { data: currentTpl } = await supabase
+    .from("templates")
+    .select("storage_path")
+    .eq("id", templateId)
+    .maybeSingle();
+
+  if (currentTpl?.storage_path && isSafeStoragePath(currentTpl.storage_path)) {
+    await supabase.storage
+      .from("taltum-files")
+      .remove([currentTpl.storage_path]);
   }
 
   const { error } = await supabase
@@ -338,7 +409,7 @@ export async function updateServiceAction(
     is_active: boolean;
   }
 ) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
   const deliverables = (params.deliverablesText ?? "")
     .split("\n")
     .map((line) => line.trim())
@@ -369,7 +440,7 @@ export async function updateServiceAction(
 }
 
 export async function deleteServiceAction(serviceId: string) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
   const { error } = await supabase
     .from("services")
     .delete()
@@ -417,10 +488,7 @@ export interface CreateQuoteInput {
 }
 
 export async function createQuoteAction(input: CreateQuoteInput) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user } = await requireActiveConsultant();
 
   const normalizedItems = input.items.map((item, idx) => {
     const qty = Math.max(0.01, Number(item.quantity) || 1);
@@ -462,7 +530,7 @@ export async function createQuoteAction(input: CreateQuoteInput) {
       intro_text: input.intro_text.trim() || null,
       terms_text: input.terms_text.trim() || null,
       notes: input.notes.trim() || null,
-      created_by: user?.id ?? null,
+      created_by: user.id,
     })
     .select("id")
     .single();
@@ -494,7 +562,7 @@ export async function updateQuoteStatusAction(
   quoteId: string,
   status: QuoteStatus
 ) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
   const { data: quote, error } = await supabase
     .from("quotes")
     .update({ status })
@@ -506,7 +574,6 @@ export async function updateQuoteStatusAction(
     throw new Error(error.message);
   }
 
-  // Si pasa a aprobada, aseguramos que la empresa quede como cliente activo
   if (status === "aprobada" && quote?.company_id) {
     await supabase
       .from("companies")
@@ -541,10 +608,10 @@ export async function createReportAction(params: {
   attachment_path?: string | null;
   attachment_name?: string | null;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user } = await requireActiveConsultant();
+  const safePath = isSafeStoragePath(params.attachment_path)
+    ? params.attachment_path
+    : null;
 
   const { data, error } = await supabase
     .from("reports")
@@ -561,9 +628,9 @@ export async function createReportAction(params: {
       findings: params.findings.trim() || null,
       recommendations: params.recommendations.trim() || null,
       compliance_score: params.compliance_score,
-      attachment_path: params.attachment_path ?? null,
-      attachment_name: params.attachment_name ?? null,
-      created_by: user?.id ?? null,
+      attachment_path: safePath,
+      attachment_name: safePath ? params.attachment_name ?? null : null,
+      created_by: user.id,
     })
     .select("id")
     .single();
@@ -582,7 +649,7 @@ export async function updateReportStatusAction(
   reportId: string,
   status: ReportStatus
 ) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
   const { error } = await supabase
     .from("reports")
     .update({ status })
@@ -611,10 +678,11 @@ export async function registerUploadedFileAction(params: {
   size_bytes: number;
   version?: string;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user } = await requireActiveConsultant();
+
+  if (!isSafeStoragePath(params.storage_path)) {
+    return { error: "Ruta de almacenamiento inválida." };
+  }
 
   const { data, error } = await supabase
     .from("files")
@@ -627,9 +695,9 @@ export async function registerUploadedFileAction(params: {
       file_name: params.file_name,
       storage_path: params.storage_path,
       mime_type: params.mime_type || "application/octet-stream",
-      size_bytes: params.size_bytes,
+      size_bytes: Math.max(0, Number(params.size_bytes) || 0),
       version: params.version?.trim() || "1.0",
-      uploaded_by: user?.id ?? null,
+      uploaded_by: user.id,
     })
     .select("id")
     .single();
@@ -645,10 +713,14 @@ export async function registerUploadedFileAction(params: {
 }
 
 export async function getConsultantFileSignedUrlAction(storagePath: string) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
+  if (!isSafeStoragePath(storagePath)) {
+    return { error: "Ruta de archivo no permitida." };
+  }
+
   const { data, error } = await supabase.storage
     .from("taltum-files")
-    .createSignedUrl(storagePath, 3600);
+    .createSignedUrl(storagePath, 900); // Vigencia corta de 15 minutos para la sesión del consultor
 
   if (error || !data?.signedUrl) {
     return { error: error?.message ?? "No se pudo abrir el archivo." };
@@ -656,9 +728,19 @@ export async function getConsultantFileSignedUrlAction(storagePath: string) {
   return { url: data.signedUrl };
 }
 
-export async function deleteFileAction(fileId: string, storagePath: string) {
-  const supabase = await createClient();
-  await supabase.storage.from("taltum-files").remove([storagePath]);
+export async function deleteFileAction(fileId: string, _storagePath?: string) {
+  const { supabase } = await requireActiveConsultant();
+
+  const { data: fileRow } = await supabase
+    .from("files")
+    .select("storage_path")
+    .eq("id", fileId)
+    .maybeSingle();
+
+  if (fileRow?.storage_path && isSafeStoragePath(fileRow.storage_path)) {
+    await supabase.storage.from("taltum-files").remove([fileRow.storage_path]);
+  }
+
   const { error } = await supabase.from("files").delete().eq("id", fileId);
 
   if (error) {
@@ -680,10 +762,7 @@ export async function createShareLinkAction(params: {
   allow_download?: boolean;
   expires_in_days?: number | null;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user } = await requireActiveConsultant();
 
   const days = params.expires_in_days ?? null;
   const ttlSeconds = days ? days * 86400 : 365 * 86400;
@@ -692,7 +771,11 @@ export async function createShareLinkAction(params: {
     : null;
 
   let signedFileUrl: string | null = null;
-  if (params.storage_path && (params.allow_download ?? true)) {
+  if (
+    params.storage_path &&
+    isSafeStoragePath(params.storage_path) &&
+    (params.allow_download ?? true)
+  ) {
     const { data: signedData } = await supabase.storage
       .from("taltum-files")
       .createSignedUrl(params.storage_path, ttlSeconds);
@@ -712,7 +795,7 @@ export async function createShareLinkAction(params: {
     allow_download: params.allow_download ?? true,
     is_active: true,
     expires_at: expiresAt,
-    created_by: user?.id ?? null,
+    created_by: user.id,
   };
 
   const { data, error } = await supabase
@@ -725,7 +808,6 @@ export async function createShareLinkAction(params: {
     return { error: error?.message ?? "No se pudo generar el enlace." };
   }
 
-  // Si se comparte una cotización en borrador, pasarla automáticamente a 'enviada'
   if (params.resource_type === "quote") {
     await supabase
       .from("quotes")
@@ -745,7 +827,7 @@ export async function toggleShareLinkAction(
   shareLinkId: string,
   isActive: boolean
 ) {
-  const supabase = await createClient();
+  const { supabase } = await requireActiveConsultant();
   const { error } = await supabase
     .from("share_links")
     .update({ is_active: isActive })
@@ -763,9 +845,14 @@ export async function respondSharedQuotePublicAction(
   token: string,
   decision: "aprobada" | "rechazada"
 ) {
+  const cleanToken = (token ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{24,64}$/.test(cleanToken)) {
+    return { error: "Token de enlace no válido." };
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("respond_shared_quote", {
-    p_token: token,
+    p_token: cleanToken,
     p_decision: decision,
   });
 
@@ -773,6 +860,6 @@ export async function respondSharedQuotePublicAction(
     return { error: "No fue posible registrar la respuesta." };
   }
 
-  revalidatePath(`/s/${token}`);
+  revalidatePath(`/s/${cleanToken}`);
   return { ok: true };
 }

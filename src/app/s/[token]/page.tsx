@@ -176,7 +176,7 @@ export default async function PublicSharePage({
 
               {Boolean(resource.signed_url) && (
                 <a
-                  href={String(resource.signed_url)}
+                  href={`${String(resource.signed_url)}?download=1`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex min-h-11 w-full sm:w-auto shrink-0 items-center justify-center gap-2 rounded-xl bg-dorado px-5 py-3 text-sm font-semibold text-white shadow-xs transition hover:bg-dorado-dark"
@@ -300,7 +300,7 @@ export default async function PublicSharePage({
                   {String(resource.attachment_name ?? "Descargar anexo")}
                 </span>
                 <a
-                  href={String(resource.signed_url)}
+                  href={`${String(resource.signed_url)}?download=1`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-petrol px-4 py-2 text-xs font-semibold text-white hover:bg-petrol-light"

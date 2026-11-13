@@ -22,6 +22,10 @@ export default async function DashboardLayout({
     .eq("id", user.id)
     .maybeSingle();
 
+  if (!profile || !profile.is_active) {
+    redirect("/login");
+  }
+
   const consultantName =
     profile?.full_name ??
     (user.email === "admin1@taltum.co"
